@@ -58,6 +58,8 @@ void OSSL_ENCODER_free(OSSL_ENCODER *encoder)
     CRYPTO_DOWN_REF(&encoder->base.refcnt, &ref, encoder->base.lock);
     if (ref > 0)
         return;
+    OPENSSL_free(encoder->base.name);
+    ossl_property_free(encoder->base.parsed_propdef);
     ossl_provider_free(encoder->base.prov);
     CRYPTO_THREAD_lock_free(encoder->base.lock);
     OPENSSL_free(encoder);
@@ -76,6 +78,7 @@ static void *encoder_store_new(OSSL_LIB_CTX *ctx)
 
 
 static const OSSL_LIB_CTX_METHOD encoder_store_method = {
+    OSSL_LIB_CTX_METHOD_DEFAULT_PRIORITY,
     encoder_store_new,
     encoder_store_free,
 };
@@ -159,16 +162,24 @@ static int put_encoder_in_store(OSSL_LIB_CTX *libctx, void *store,
 }
 
 /* Create and populate a encoder method */
-static void *encoder_from_dispatch(int id, const OSSL_ALGORITHM *algodef,
-                                   OSSL_PROVIDER *prov)
+static void *encoder_from_algorithm(int id, const OSSL_ALGORITHM *algodef,
+                                    OSSL_PROVIDER *prov)
 {
     OSSL_ENCODER *encoder = NULL;
     const OSSL_DISPATCH *fns = algodef->implementation;
+    OSSL_LIB_CTX *libctx = ossl_provider_libctx(prov);
 
     if ((encoder = ossl_encoder_new()) == NULL)
         return NULL;
     encoder->base.id = id;
+    if ((encoder->base.name = ossl_algorithm_get1_first_name(algodef)) == NULL) {
+        OSSL_ENCODER_free(encoder);
+        return NULL;
+    }
     encoder->base.propdef = algodef->property_definition;
+    encoder->base.description = algodef->algorithm_description;
+    encoder->base.parsed_propdef
+        = ossl_parse_property(libctx, algodef->property_definition);
 
     for (; fns->function_id != 0; fns++) {
         switch (fns->function_id) {
@@ -232,9 +243,7 @@ static void *encoder_from_dispatch(int id, const OSSL_ALGORITHM *algodef,
           || (encoder->newctx != NULL && encoder->freectx != NULL)
           || (encoder->import_object != NULL && encoder->free_object != NULL)
           || (encoder->import_object == NULL && encoder->free_object == NULL))
-        || encoder->encode == NULL
-        || encoder->gettable_params == NULL
-        || encoder->get_params == NULL) {
+        || encoder->encode == NULL) {
         OSSL_ENCODER_free(encoder);
         ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_INVALID_PROVIDER_FUNCTIONS);
         return NULL;
@@ -253,7 +262,7 @@ static void *encoder_from_dispatch(int id, const OSSL_ALGORITHM *algodef,
 /*
  * The core fetching functionality passes the names of the implementation.
  * This function is responsible to getting an identity number for them,
- * then call encoder_from_dispatch() with that identity number.
+ * then call encoder_from_algorithm() with that identity number.
  */
 static void *construct_encoder(const OSSL_ALGORITHM *algodef,
                                OSSL_PROVIDER *prov, void *data)
@@ -272,7 +281,7 @@ static void *construct_encoder(const OSSL_ALGORITHM *algodef,
     void *method = NULL;
 
     if (id != 0)
-        method = encoder_from_dispatch(id, algodef, prov);
+        method = encoder_from_algorithm(id, algodef, prov);
 
     /*
      * Flag to indicate that there was actual construction errors.  This
@@ -406,7 +415,7 @@ OSSL_ENCODER *ossl_encoder_fetch_by_number(OSSL_LIB_CTX *libctx, int id,
  * Library of basic method functions
  */
 
-const OSSL_PROVIDER *OSSL_ENCODER_provider(const OSSL_ENCODER *encoder)
+const OSSL_PROVIDER *OSSL_ENCODER_get0_provider(const OSSL_ENCODER *encoder)
 {
     if (!ossl_assert(encoder != NULL)) {
         ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_PASSED_NULL_PARAMETER);
@@ -416,7 +425,7 @@ const OSSL_PROVIDER *OSSL_ENCODER_provider(const OSSL_ENCODER *encoder)
     return encoder->base.prov;
 }
 
-const char *OSSL_ENCODER_properties(const OSSL_ENCODER *encoder)
+const char *OSSL_ENCODER_get0_properties(const OSSL_ENCODER *encoder)
 {
     if (!ossl_assert(encoder != NULL)) {
         ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_PASSED_NULL_PARAMETER);
@@ -426,7 +435,18 @@ const char *OSSL_ENCODER_properties(const OSSL_ENCODER *encoder)
     return encoder->base.propdef;
 }
 
-int OSSL_ENCODER_number(const OSSL_ENCODER *encoder)
+const OSSL_PROPERTY_LIST *
+ossl_encoder_parsed_properties(const OSSL_ENCODER *encoder)
+{
+    if (!ossl_assert(encoder != NULL)) {
+        ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
+    return encoder->base.parsed_propdef;
+}
+
+int ossl_encoder_get_number(const OSSL_ENCODER *encoder)
 {
     if (!ossl_assert(encoder != NULL)) {
         ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_PASSED_NULL_PARAMETER);
@@ -434,6 +454,16 @@ int OSSL_ENCODER_number(const OSSL_ENCODER *encoder)
     }
 
     return encoder->base.id;
+}
+
+const char *OSSL_ENCODER_get0_name(const OSSL_ENCODER *encoder)
+{
+    return encoder->base.name;
+}
+
+const char *OSSL_ENCODER_get0_description(const OSSL_ENCODER *encoder)
+{
+    return encoder->base.description;
 }
 
 int OSSL_ENCODER_is_a(const OSSL_ENCODER *encoder, const char *name)
@@ -465,7 +495,7 @@ static void encoder_do_one(OSSL_PROVIDER *provider,
 
     if (id != 0)
         method =
-            encoder_from_dispatch(id, algodef, provider);
+            encoder_from_algorithm(id, algodef, provider);
 
     if (method != NULL) {
         data->user_fn(method, data->user_arg);
@@ -511,7 +541,7 @@ const OSSL_PARAM *
 OSSL_ENCODER_gettable_params(OSSL_ENCODER *encoder)
 {
     if (encoder != NULL && encoder->gettable_params != NULL) {
-        void *provctx = ossl_provider_ctx(OSSL_ENCODER_provider(encoder));
+        void *provctx = ossl_provider_ctx(OSSL_ENCODER_get0_provider(encoder));
 
         return encoder->gettable_params(provctx);
     }
@@ -528,7 +558,7 @@ int OSSL_ENCODER_get_params(OSSL_ENCODER *encoder, OSSL_PARAM params[])
 const OSSL_PARAM *OSSL_ENCODER_settable_ctx_params(OSSL_ENCODER *encoder)
 {
     if (encoder != NULL && encoder->settable_ctx_params != NULL) {
-        void *provctx = ossl_provider_ctx(OSSL_ENCODER_provider(encoder));
+        void *provctx = ossl_provider_ctx(OSSL_ENCODER_get0_provider(encoder));
 
         return encoder->settable_ctx_params(provctx);
     }

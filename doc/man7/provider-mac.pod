@@ -54,7 +54,7 @@ provider_query_operation() function
 (see L<provider-base(7)/Provider Functions>).
 
 All these "functions" have a corresponding function type definition
-named B<OSSL_{name}_fn>, and a helper function to retrieve the
+named B<OSSL_FUNC_{name}_fn>, and a helper function to retrieve the
 function pointer from an B<OSSL_DISPATCH> element named
 B<OSSL_FUNC_{name}>.
 For example, the "function" OSSL_FUNC_mac_newctx() has these:
@@ -183,7 +183,21 @@ should have as well, see the documentation of the implementation.
 
 =back
 
+=over 4
+
+=item "size" (B<OSSL_MAC_PARAM_BLOCK_SIZE>) <integer>
+
+Can be used to get the MAC block size (if supported by the algorithm).
+
 =back
+
+=back
+
+=head1 NOTES
+
+The MAC life-cycle is described in L<life_cycle-rand(7)>.  Providers should
+ensure that the various transitions listed there are supported.  At some point
+the EVP layer will begin enforcing the listed transitions.
 
 =head1 RETURN VALUES
 
@@ -203,8 +217,8 @@ array, or NULL if none is offered.
 L<provider(7)>,
 L<EVP_MAC-BLAKE2(7)>, L<EVP_MAC-CMAC(7)>, L<EVP_MAC-GMAC(7)>,
 L<EVP_MAC-HMAC(7)>, L<EVP_MAC-KMAC(7)>, L<EVP_MAC-Poly1305(7)>,
-L<EVP_MAC-Siphash(7)>
-
+L<EVP_MAC-Siphash(7)>,
+L<life_cycle-mac(7)>, L<EVP_MAC(3)>
 
 =head1 HISTORY
 

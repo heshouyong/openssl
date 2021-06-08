@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2020 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -108,6 +108,14 @@
         */
 #    include <winsock2.h>
 #    include <ws2tcpip.h>
+       /*
+        * Clang-based C++Builder 10.3.3 toolchains cannot find C inline
+        * definitions at link-time.  This header defines WspiapiLoad() as an
+        * __inline function.  https://quality.embarcadero.com/browse/RSP-33806
+        */
+#    if !defined(__BORLANDC__) || !defined(__clang__)
+#     include <wspiapi.h>
+#    endif
        /* yes, they have to be #included prior to <windows.h> */
 #   endif
 #   include <windows.h>
@@ -295,9 +303,57 @@ struct servent *getservbyname(const char *name, const char *proto);
 # endif
 /* end vxworks */
 
+/* system-specific variants defining ossl_sleep() */
+#ifdef OPENSSL_SYS_UNIX
+# include <unistd.h>
+static ossl_inline void ossl_sleep(unsigned long millis)
+{
+# ifdef OPENSSL_SYS_VXWORKS
+    struct timespec ts;
+    ts.tv_sec = (long int) (millis / 1000);
+    ts.tv_nsec = (long int) (millis % 1000) * 1000000ul;
+    nanosleep(&ts, NULL);
+# elif defined(__TANDEM)
+#  if !defined(_REENTRANT)
+#   include <cextdecs.h(PROCESS_DELAY_)>
+    /* HPNS does not support usleep for non threaded apps */
+    PROCESS_DELAY_(millis * 1000);
+#  elif defined(_SPT_MODEL_)
+#   include <spthread.h>
+#   include <spt_extensions.h>
+    usleep(millis * 1000);
+#  else
+    usleep(millis * 1000);
+#  endif
+# else
+    usleep(millis * 1000);
+# endif
+}
+#elif defined(_WIN32)
+# include <windows.h>
+static ossl_inline void ossl_sleep(unsigned long millis)
+{
+    Sleep(millis);
+}
+#else
+/* Fallback to a busy wait */
+static ossl_inline void ossl_sleep(unsigned long millis)
+{
+    struct timeval start, now;
+    unsigned long elapsedms;
+
+    gettimeofday(&start, NULL);
+    do {
+        gettimeofday(&now, NULL);
+        elapsedms = (((now.tv_sec - start.tv_sec) * 1000000)
+                     + now.tv_usec - start.tv_usec) / 1000;
+    } while (elapsedms < millis);
+}
+#endif /* defined OPENSSL_SYS_UNIX */
+
 /* ----------------------------- HP NonStop -------------------------------- */
 /* Required to support platform variant without getpid() and pid_t. */
-# ifdef __TANDEM
+# if defined(__TANDEM) && defined(_GUARDIAN_TARGET)
 #  include <strings.h>
 #  include <netdb.h>
 #  define getservbyname(name,proto)          getservbyname((char*)name,proto)

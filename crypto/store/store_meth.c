@@ -7,8 +7,8 @@
  * https://www.openssl.org/source/license.html
  */
 
-#include <openssl/store.h>
 #include <openssl/crypto.h>
+#include "crypto/store.h"
 #include "internal/core.h"
 #include "internal/namemap.h"
 #include "internal/property.h"
@@ -81,6 +81,7 @@ static void *loader_store_new(OSSL_LIB_CTX *ctx)
 
 
 static const OSSL_LIB_CTX_METHOD loader_store_method = {
+    OSSL_LIB_CTX_METHOD_DEFAULT_PRIORITY,
     loader_store_new,
     loader_store_free,
 };
@@ -162,8 +163,8 @@ static int put_loader_in_store(OSSL_LIB_CTX *libctx, void *store,
                                  up_ref_loader, free_loader);
 }
 
-static void *loader_from_dispatch(int scheme_id, const OSSL_ALGORITHM *algodef,
-                                  OSSL_PROVIDER *prov)
+static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
+                                   OSSL_PROVIDER *prov)
 {
     OSSL_STORE_LOADER *loader = NULL;
     const OSSL_DISPATCH *fns = algodef->implementation;
@@ -172,6 +173,7 @@ static void *loader_from_dispatch(int scheme_id, const OSSL_ALGORITHM *algodef,
         return NULL;
     loader->scheme_id = scheme_id;
     loader->propdef = algodef->property_definition;
+    loader->description = algodef->algorithm_description;
 
     for (; fns->function_id != 0; fns++) {
         switch (fns->function_id) {
@@ -226,7 +228,7 @@ static void *loader_from_dispatch(int scheme_id, const OSSL_ALGORITHM *algodef,
 /*
  * The core fetching functionality passes the scheme of the implementation.
  * This function is responsible to getting an identity number for them,
- * then call loader_from_dispatch() with that identity number.
+ * then call loader_from_algorithm() with that identity number.
  */
 static void *construct_loader(const OSSL_ALGORITHM *algodef,
                               OSSL_PROVIDER *prov, void *data)
@@ -245,7 +247,7 @@ static void *construct_loader(const OSSL_ALGORITHM *algodef,
     void *method = NULL;
 
     if (id != 0)
-        method = loader_from_dispatch(id, algodef, prov);
+        method = loader_from_algorithm(id, algodef, prov);
 
     /*
      * Flag to indicate that there was actual construction errors.  This
@@ -280,7 +282,7 @@ static OSSL_STORE_LOADER *inner_loader_fetch(OSSL_LIB_CTX *libctx,
     }
 
     /*
-     * If we have been passed neither a scheme_id or a scheme, we have an
+     * If we have been passed neither a scheme_id nor a scheme, we have an
      * internal programming error.
      */
     if (!ossl_assert(id != 0 || scheme != NULL)) {
@@ -371,7 +373,7 @@ OSSL_STORE_LOADER *ossl_store_loader_fetch_by_number(OSSL_LIB_CTX *libctx,
  * Library of basic method functions
  */
 
-const OSSL_PROVIDER *OSSL_STORE_LOADER_provider(const OSSL_STORE_LOADER *loader)
+const OSSL_PROVIDER *OSSL_STORE_LOADER_get0_provider(const OSSL_STORE_LOADER *loader)
 {
     if (!ossl_assert(loader != NULL)) {
         ERR_raise(ERR_LIB_OSSL_STORE, ERR_R_PASSED_NULL_PARAMETER);
@@ -381,7 +383,7 @@ const OSSL_PROVIDER *OSSL_STORE_LOADER_provider(const OSSL_STORE_LOADER *loader)
     return loader->prov;
 }
 
-const char *OSSL_STORE_LOADER_properties(const OSSL_STORE_LOADER *loader)
+const char *OSSL_STORE_LOADER_get0_properties(const OSSL_STORE_LOADER *loader)
 {
     if (!ossl_assert(loader != NULL)) {
         ERR_raise(ERR_LIB_OSSL_STORE, ERR_R_PASSED_NULL_PARAMETER);
@@ -391,7 +393,7 @@ const char *OSSL_STORE_LOADER_properties(const OSSL_STORE_LOADER *loader)
     return loader->propdef;
 }
 
-int OSSL_STORE_LOADER_number(const OSSL_STORE_LOADER *loader)
+int ossl_store_loader_get_number(const OSSL_STORE_LOADER *loader)
 {
     if (!ossl_assert(loader != NULL)) {
         ERR_raise(ERR_LIB_OSSL_STORE, ERR_R_PASSED_NULL_PARAMETER);
@@ -399,6 +401,11 @@ int OSSL_STORE_LOADER_number(const OSSL_STORE_LOADER *loader)
     }
 
     return loader->scheme_id;
+}
+
+const char *OSSL_STORE_LOADER_get0_description(const OSSL_STORE_LOADER *loader)
+{
+    return loader->description;
 }
 
 int OSSL_STORE_LOADER_is_a(const OSSL_STORE_LOADER *loader, const char *name)
@@ -430,7 +437,7 @@ static void loader_do_one(OSSL_PROVIDER *provider,
 
     if (id != 0)
         method =
-            loader_from_dispatch(id, algodef, provider);
+            loader_from_algorithm(id, algodef, provider);
 
     if (method != NULL) {
         data->user_fn(method, data->user_arg);

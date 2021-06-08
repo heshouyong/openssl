@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2020 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -616,8 +616,6 @@ static int addrinfo_wrap(int family, int socktype,
 
 DEFINE_RUN_ONCE_STATIC(do_bio_lookup_init)
 {
-    if (!OPENSSL_init_crypto(0, NULL))
-        return 0;
     bio_lookup_lock = CRYPTO_THREAD_lock_new();
     return bio_lookup_lock != NULL;
 }
@@ -630,8 +628,8 @@ int BIO_lookup(const char *host, const char *service,
 }
 
 /*-
- * BIO_lookup_ex - look up the node and service you want to connect to.
- * @node: the node you want to connect to.
+ * BIO_lookup_ex - look up the host and service you want to connect to.
+ * @host: the host (or node, in case family == AF_UNIX) you want to connect to.
  * @service: the service you want to connect to.
  * @lookup_type: declare intent with the result, client or server.
  * @family: the address family you want to use.  Use AF_UNSPEC for any, or
@@ -644,7 +642,7 @@ int BIO_lookup(const char *host, const char *service,
  *            with 0 for the protocol)
  * @res: Storage place for the resulting list of returned addresses
  *
- * This will do a lookup of the node and service that you want to connect to.
+ * This will do a lookup of the host and service that you want to connect to.
  * It returns a linked list of different addresses you can try to connect to.
  *
  * When no longer needed you should call BIO_ADDRINFO_free() to free the result.
@@ -784,7 +782,10 @@ int BIO_lookup_ex(const char *host, const char *service, int lookup_type,
             goto err;
         }
 
-        CRYPTO_THREAD_write_lock(bio_lookup_lock);
+        if (!CRYPTO_THREAD_write_lock(bio_lookup_lock)) {
+            ret = 0;
+            goto err;
+        }
         he_fallback_address = INADDR_ANY;
         if (host == NULL) {
             he = &he_fallback;

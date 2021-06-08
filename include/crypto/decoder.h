@@ -23,8 +23,8 @@ OSSL_DECODER *ossl_decoder_fetch_by_number(OSSL_LIB_CTX *libctx,
  * except read a DER blob and pass it on as a provider object abstraction
  * (provider-object(7)).
  */
-void *ossl_decoder_from_dispatch(int id, const OSSL_ALGORITHM *algodef,
-                                 OSSL_PROVIDER *prov);
+void *ossl_decoder_from_algorithm(int id, const OSSL_ALGORITHM *algodef,
+                                  OSSL_PROVIDER *prov);
 
 OSSL_DECODER_INSTANCE *
 ossl_decoder_instance_new(OSSL_DECODER *decoder, void *decoderctx);
@@ -36,6 +36,8 @@ int ossl_decoder_ctx_setup_for_pkey(OSSL_DECODER_CTX *ctx,
                                     EVP_PKEY **pkey, const char *keytype,
                                     OSSL_LIB_CTX *libctx,
                                     const char *propquery);
+
+int ossl_decoder_get_number(const OSSL_DECODER *encoder);
 
 #endif
 

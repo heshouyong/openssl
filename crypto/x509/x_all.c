@@ -52,16 +52,16 @@ int X509_REQ_verify(X509_REQ *a, EVP_PKEY *r)
 
 int NETSCAPE_SPKI_verify(NETSCAPE_SPKI *a, EVP_PKEY *r)
 {
-    return (ASN1_item_verify(ASN1_ITEM_rptr(NETSCAPE_SPKAC),
-                             &a->sig_algor, a->signature, a->spkac, r));
+    return ASN1_item_verify(ASN1_ITEM_rptr(NETSCAPE_SPKAC),
+                            &a->sig_algor, a->signature, a->spkac, r);
 }
 
 int X509_sign(X509 *x, EVP_PKEY *pkey, const EVP_MD *md)
 {
     x->cert_info.enc.modified = 1;
-    return (ASN1_item_sign(ASN1_ITEM_rptr(X509_CINF), &x->cert_info.signature,
-                           &x->sig_alg, &x->signature, &x->cert_info, pkey,
-                           md));
+    return ASN1_item_sign_ex(ASN1_ITEM_rptr(X509_CINF), &x->cert_info.signature,
+                             &x->sig_alg, &x->signature, &x->cert_info, NULL,
+                             pkey, md, x->libctx, x->propq);
 }
 
 int X509_sign_ctx(X509 *x, EVP_MD_CTX *ctx)
@@ -75,11 +75,15 @@ int X509_sign_ctx(X509 *x, EVP_MD_CTX *ctx)
 static ASN1_VALUE *simple_get_asn1(const char *url, BIO *bio, BIO *rbio,
                                    int timeout, const ASN1_ITEM *it)
 {
-    return OSSL_HTTP_get_asn1(url, NULL, NULL /* no proxy used */, bio,
-                              rbio, NULL /* no callback for SSL/TLS */, NULL,
-                              NULL /* headers */, 1024 /* maxline */,
-                              0 /* max_resp_len */, timeout,
-                              NULL /* expected_content_type */, it);
+    BIO *mem = OSSL_HTTP_get(url, NULL /* proxy */, NULL /* no_proxy */,
+                             bio, rbio, NULL /* cb */ , NULL /* arg */,
+                             1024 /* buf_size */, NULL /* headers */,
+                             NULL /* expected_ct */, 1 /* expect_asn1 */,
+                             OSSL_HTTP_DEFAULT_MAX_RESP_LEN, timeout);
+    ASN1_VALUE *res = ASN1_item_d2i_bio(it, mem, NULL);
+
+    BIO_free(mem);
+    return res;
 }
 
 X509 *X509_load_http(const char *url, BIO *bio, BIO *rbio, int timeout)
@@ -90,8 +94,9 @@ X509 *X509_load_http(const char *url, BIO *bio, BIO *rbio, int timeout)
 
 int X509_REQ_sign(X509_REQ *x, EVP_PKEY *pkey, const EVP_MD *md)
 {
-    return (ASN1_item_sign(ASN1_ITEM_rptr(X509_REQ_INFO), &x->sig_alg, NULL,
-                           x->signature, &x->req_info, pkey, md));
+    return ASN1_item_sign_ex(ASN1_ITEM_rptr(X509_REQ_INFO), &x->sig_alg, NULL,
+                             x->signature, &x->req_info, NULL,
+                             pkey, md, x->libctx, x->propq);
 }
 
 int X509_REQ_sign_ctx(X509_REQ *x, EVP_MD_CTX *ctx)
@@ -104,8 +109,9 @@ int X509_REQ_sign_ctx(X509_REQ *x, EVP_MD_CTX *ctx)
 int X509_CRL_sign(X509_CRL *x, EVP_PKEY *pkey, const EVP_MD *md)
 {
     x->crl.enc.modified = 1;
-    return (ASN1_item_sign(ASN1_ITEM_rptr(X509_CRL_INFO), &x->crl.sig_alg,
-                           &x->sig_alg, &x->signature, &x->crl, pkey, md));
+    return ASN1_item_sign_ex(ASN1_ITEM_rptr(X509_CRL_INFO), &x->crl.sig_alg,
+                             &x->sig_alg, &x->signature, &x->crl, NULL,
+                             pkey, md, x->libctx, x->propq);
 }
 
 int X509_CRL_sign_ctx(X509_CRL *x, EVP_MD_CTX *ctx)
@@ -124,8 +130,8 @@ X509_CRL *X509_CRL_load_http(const char *url, BIO *bio, BIO *rbio, int timeout)
 
 int NETSCAPE_SPKI_sign(NETSCAPE_SPKI *x, EVP_PKEY *pkey, const EVP_MD *md)
 {
-    return (ASN1_item_sign(ASN1_ITEM_rptr(NETSCAPE_SPKAC), &x->sig_algor, NULL,
-                           x->signature, x->spkac, pkey, md));
+    return ASN1_item_sign_ex(ASN1_ITEM_rptr(NETSCAPE_SPKAC), &x->sig_algor, NULL,
+                          x->signature, x->spkac, NULL, pkey, md, NULL, NULL);
 }
 
 #ifndef OPENSSL_NO_STDIO
@@ -176,8 +182,15 @@ int i2d_X509_CRL_bio(BIO *bp, const X509_CRL *crl)
 PKCS7 *d2i_PKCS7_fp(FILE *fp, PKCS7 **p7)
 {
     PKCS7 *ret;
+    OSSL_LIB_CTX *libctx = NULL;
+    const char *propq = NULL;
 
-    ret = ASN1_item_d2i_fp(ASN1_ITEM_rptr(PKCS7), fp, p7);
+    if (p7 != NULL && *p7 != NULL) {
+        libctx = (*p7)->ctx.libctx;
+        propq = (*p7)->ctx.propq;
+    }
+
+    ret = ASN1_item_d2i_fp_ex(ASN1_ITEM_rptr(PKCS7), fp, p7, libctx, propq);
     if (ret != NULL)
         ossl_pkcs7_resolve_libctx(ret);
     return ret;
@@ -192,8 +205,16 @@ int i2d_PKCS7_fp(FILE *fp, const PKCS7 *p7)
 PKCS7 *d2i_PKCS7_bio(BIO *bp, PKCS7 **p7)
 {
     PKCS7 *ret;
+    OSSL_LIB_CTX *libctx = NULL;
+    const char *propq = NULL;
 
-    ret = ASN1_item_d2i_bio(ASN1_ITEM_rptr(PKCS7), bp, p7);
+    if (p7 != NULL && *p7 != NULL) {
+        libctx = (*p7)->ctx.libctx;
+        propq = (*p7)->ctx.propq;
+    }
+
+
+    ret = ASN1_item_d2i_bio_ex(ASN1_ITEM_rptr(PKCS7), bp, p7, libctx, propq);
     if (ret != NULL)
         ossl_pkcs7_resolve_libctx(ret);
     return ret;
@@ -218,7 +239,15 @@ int i2d_X509_REQ_fp(FILE *fp, const X509_REQ *req)
 
 X509_REQ *d2i_X509_REQ_bio(BIO *bp, X509_REQ **req)
 {
-    return ASN1_item_d2i_bio(ASN1_ITEM_rptr(X509_REQ), bp, req);
+    OSSL_LIB_CTX *libctx = NULL;
+    const char *propq = NULL;
+
+    if (req != NULL && *req != NULL) {
+        libctx = (*req)->libctx;
+        propq = (*req)->propq;
+    }
+
+    return ASN1_item_d2i_bio_ex(ASN1_ITEM_rptr(X509_REQ), bp, req, libctx, propq);
 }
 
 int i2d_X509_REQ_bio(BIO *bp, const X509_REQ *req)
@@ -399,8 +428,8 @@ int X509_digest(const X509 *cert, const EVP_MD *md, unsigned char *data,
         memcpy(data, cert->sha1_hash, sizeof(cert->sha1_hash));
         return 1;
     }
-    return (asn1_item_digest_ex(ASN1_ITEM_rptr(X509), md, (char *)cert, data,
-                                len, cert->libctx, cert->propq));
+    return ossl_asn1_item_digest_ex(ASN1_ITEM_rptr(X509), md, (char *)cert,
+                                    data, len, cert->libctx, cert->propq);
 }
 
 /* calculate cert digest using the same hash algorithm as in its signature */
@@ -435,7 +464,12 @@ ASN1_OCTET_STRING *X509_digest_sig(const X509 *cert)
 int X509_CRL_digest(const X509_CRL *data, const EVP_MD *type,
                     unsigned char *md, unsigned int *len)
 {
-    if (type == EVP_sha1() && (data->flags & EXFLAG_SET) != 0
+    if (type == NULL) {
+        ERR_raise(ERR_LIB_X509, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+    if (EVP_MD_is_a(type, SN_sha1)
+            && (data->flags & EXFLAG_SET) != 0
             && (data->flags & EXFLAG_NO_FINGERPRINT) == 0) {
         /* Asking for SHA1; always computed in CRL d2i. */
         if (len != NULL)
@@ -443,30 +477,30 @@ int X509_CRL_digest(const X509_CRL *data, const EVP_MD *type,
         memcpy(md, data->sha1_hash, sizeof(data->sha1_hash));
         return 1;
     }
-    return (ASN1_item_digest
-            (ASN1_ITEM_rptr(X509_CRL), type, (char *)data, md, len));
+    return ossl_asn1_item_digest_ex(ASN1_ITEM_rptr(X509_CRL), type, (char *)data,
+                                    md, len, data->libctx, data->propq);
 }
 
 int X509_REQ_digest(const X509_REQ *data, const EVP_MD *type,
                     unsigned char *md, unsigned int *len)
 {
-    return (ASN1_item_digest
-            (ASN1_ITEM_rptr(X509_REQ), type, (char *)data, md, len));
+    return ossl_asn1_item_digest_ex(ASN1_ITEM_rptr(X509_REQ), type, (char *)data,
+                                    md, len, data->libctx, data->propq);
 }
 
 int X509_NAME_digest(const X509_NAME *data, const EVP_MD *type,
                      unsigned char *md, unsigned int *len)
 {
-    return (ASN1_item_digest
-            (ASN1_ITEM_rptr(X509_NAME), type, (char *)data, md, len));
+    return ASN1_item_digest(ASN1_ITEM_rptr(X509_NAME), type, (char *)data,
+                            md, len);
 }
 
 int PKCS7_ISSUER_AND_SERIAL_digest(PKCS7_ISSUER_AND_SERIAL *data,
                                    const EVP_MD *type, unsigned char *md,
                                    unsigned int *len)
 {
-    return (ASN1_item_digest(ASN1_ITEM_rptr(PKCS7_ISSUER_AND_SERIAL), type,
-                             (char *)data, md, len));
+    return ASN1_item_digest(ASN1_ITEM_rptr(PKCS7_ISSUER_AND_SERIAL), type,
+                            (char *)data, md, len);
 }
 
 #ifndef OPENSSL_NO_STDIO
